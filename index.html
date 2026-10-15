@@ -1,0 +1,402 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Smart Parking Manager</title>
+  <link rel="stylesheet" href="css/style.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+</head>
+<body>
+  <div class="app">
+
+    <!-- ========== Sidebar ========== -->
+    <aside class="sidebar" id="sidebar">
+      <div class="sidebar-brand">
+        <div class="brand-icon"><i class="fas fa-parking"></i></div>
+        <div>
+          <h1>Smart Parking</h1>
+          <p class="brand-sub">Parking Management</p>
+        </div>
+      </div>
+
+      <nav class="sidebar-nav">
+        <a href="#" data-section="dashboard" class="nav-item active">
+          <i class="fas fa-th-large"></i><span>Dashboard</span>
+        </a>
+        <a href="#" data-section="parking-map" class="nav-item">
+          <i class="fas fa-map"></i><span>Parking Map</span>
+        </a>
+        <a href="#" data-section="parking-grid" class="nav-item">
+          <i class="fas fa-square"></i><span>Parking Grid</span>
+        </a>
+        <a href="#" data-section="search" class="nav-item">
+          <i class="fas fa-search"></i><span>Vehicle Search</span>
+        </a>
+        <a href="#" data-section="entry" class="nav-item">
+          <i class="fas fa-arrow-circle-down"></i><span>Vehicle Entry</span>
+        </a>
+        <a href="#" data-section="exit" class="nav-item">
+          <i class="fas fa-arrow-circle-up"></i><span>Vehicle Exit</span>
+        </a>
+        <a href="#" data-section="history" class="nav-item">
+          <i class="fas fa-history"></i><span>History</span>
+        </a>
+        <a href="#" data-section="receipt" class="nav-item">
+          <i class="fas fa-receipt"></i><span>Receipt</span>
+        </a>
+      </nav>
+
+      <div class="sidebar-footer">
+        <button class="btn-reset" id="btn-reset" title="Reset all data (demo only)">
+          <i class="fas fa-rotate-left"></i> Reset Data
+        </button>
+      </div>
+    </aside>
+
+    <!-- ========== Mobile toggle ========== -->
+    <button class="mobile-toggle" id="mobile-toggle" aria-label="Toggle navigation">
+      <i class="fas fa-bars"></i>
+    </button>
+
+    <!-- ========== Main ========== -->
+    <main class="main">
+      <header class="topbar">
+        <h2 class="topbar-title" id="topbar-title">Dashboard</h2>
+        <span class="topbar-badge" id="topbar-badge">Parking Manager</span>
+      </header>
+
+      <!-- ===== Dashboard ===== -->
+      <section class="section" id="sec-dashboard">
+        <div class="stats-row">
+          <div class="stat-card">
+            <div class="stat-icon stat-icon--blue"><i class="fas fa-warehouse"></i></div>
+            <div class="stat-info">
+              <p class="stat-value" id="stat-total">20</p>
+              <p class="stat-label">Total Slots</p>
+            </div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-icon stat-icon--green"><i class="fas fa-check-circle"></i></div>
+            <div class="stat-info">
+              <p class="stat-value" id="stat-available">20</p>
+              <p class="stat-label">Available Slots</p>
+            </div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-icon stat-icon--red"><i class="fas fa-times-circle"></i></div>
+            <div class="stat-info">
+              <p class="stat-value" id="stat-occupied">0</p>
+              <p class="stat-label">Occupied Slots</p>
+            </div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-icon stat-icon--amber"><i class="fas fa-list-ul"></i></div>
+            <div class="stat-info">
+              <p class="stat-value" id="stat-queue">0</p>
+              <p class="stat-label">Waiting in Queue</p>
+            </div>
+          </div>
+        </div>
+
+        <div class="info-panel">
+          <h3><i class="fas fa-info-circle"></i> How It Works</h3>
+          <ul>
+            <li><strong>Entry:</strong> Register a vehicle and the system assigns the first available slot automatically.</li>
+            <li><strong>Full lot:</strong> When all slots are occupied, vehicles join a first-in, first-out waiting queue.</li>
+            <li><strong>Exit:</strong> Search by registration number — the system calculates the duration and fee, frees the slot, and assigns it to the next vehicle in the queue.</li>
+          </ul>
+        </div>
+      </section>
+
+      <!-- ===== Parking Map ===== -->
+      <section class="section" id="sec-parking-map" style="display:none;">
+        <div class="section-header">
+          <h3><i class="fas fa-map"></i> Interactive Parking Map</h3>
+          <span class="section-hint" id="map-status">Click any slot to view details</span>
+        </div>
+        <div class="map-layout">
+          <div class="parking-grid" id="map-grid"></div>
+          <div class="slot-details" id="slot-details" style="display:none;">
+            <div class="slot-details-header">
+              <h4 id="slot-details-title">Slot P01</h4>
+              <button class="slot-details-close" id="slot-details-close" aria-label="Close"><i class="fas fa-times"></i></button>
+            </div>
+            <div class="slot-details-status" id="slot-details-status">Available</div>
+            <div class="slot-details-body">
+              <div class="detail-row"><span class="detail-label">Slot</span><span class="detail-value" id="slot-det-id">—</span></div>
+              <div class="detail-row"><span class="detail-label">Status</span><span class="detail-value" id="slot-det-status">—</span></div>
+              <div class="detail-row" id="slot-det-reg-row" style="display:none;"><span class="detail-label">Registration</span><span class="detail-value" id="slot-det-reg">—</span></div>
+              <div class="detail-row" id="slot-det-type-row" style="display:none;"><span class="detail-label">Vehicle Type</span><span class="detail-value" id="slot-det-type">—</span></div>
+              <div class="detail-row" id="slot-det-entry-row" style="display:none;"><span class="detail-label">Entry Time</span><span class="detail-value" id="slot-det-entry">—</span></div>
+              <div class="detail-row" id="slot-det-live-duration-row" style="display:none;">
+                <span class="detail-label">Current Duration</span>
+                <span class="detail-value" id="slot-det-live-duration">—</span>
+              </div>
+              <div class="detail-row" id="slot-det-live-fee-row" style="display:none;">
+                <span class="detail-label">Estimated Fee</span>
+                <span class="detail-value" id="slot-det-live-fee">—</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ===== Printable Receipt (hidden until exit) ===== -->
+      <section class="section" id="sec-receipt" style="display:none;">
+        <div class="section-header">
+          <h3><i class="fas fa-receipt"></i> Parking Receipt</h3>
+          <div class="receipt-actions">
+            <button type="button" id="btn-print-receipt" class="btn btn-primary">
+              <i class="fas fa-print"></i> Print Receipt
+            </button>
+            <button type="button" id="btn-receipt-close" class="btn btn-secondary">Close</button>
+          </div>
+        </div>
+        <div class="receipt-card card" id="receipt-section">
+          <div class="receipt-header">
+            <div class="receipt-brand">
+              <div class="receipt-brand-icon"><i class="fas fa-parking"></i></div>
+              <div>
+                <h4>Smart Parking Manager</h4>
+                <p>Parking Management System</p>
+              </div>
+            </div>
+            <div class="receipt-number-badge">
+              <span class="receipt-label">Receipt No.</span>
+              <span class="receipt-number-value" id="receipt-number">—</span>
+            </div>
+          </div>
+          <div class="receipt-body">
+            <div class="receipt-meta">
+              <div class="receipt-meta-row"><span class="receipt-meta-label">Date Issued</span><span class="receipt-meta-value" id="receipt-date">—</span></div>
+              <div class="receipt-meta-row"><span class="receipt-meta-label">Vehicle</span><span class="receipt-meta-value" id="receipt-reg">—</span></div>
+              <div class="receipt-meta-row"><span class="receipt-meta-label">Vehicle Type</span><span class="receipt-meta-value" id="receipt-type">—</span></div>
+              <div class="receipt-meta-row"><span class="receipt-meta-label">Parking Slot</span><span class="receipt-meta-value" id="receipt-slot">—</span></div>
+            </div>
+            <div class="receipt-divider"></div>
+            <div class="receipt-timing">
+              <div class="receipt-timing-row">
+                <span class="receipt-label">Entry Time</span>
+                <span class="receipt-value" id="receipt-entry-time">—</span>
+              </div>
+              <div class="receipt-timing-row">
+                <span class="receipt-label">Exit Time</span>
+                <span class="receipt-value" id="receipt-exit-time">—</span>
+              </div>
+              <div class="receipt-timing-row receipt-total-row">
+                <span class="receipt-label">Total Duration</span>
+                <span class="receipt-value" id="receipt-duration">—</span>
+                <span class="receipt-duration-long" id="receipt-duration-long">—</span>
+              </div>
+            </div>
+            <div class="receipt-divider"></div>              <div class="receipt-fee-section">
+              <h5 class="receipt-fee-heading">Fee Calculation</h5>
+              <div class="receipt-fee-row" id="receipt-fee-itemized">
+                <span class="receipt-fee-item-desc">First hour</span>
+                <span class="receipt-fee-item-amt">₹30.00</span>
+              </div>
+              <div class="receipt-fee-row" id="receipt-fee-additional" style="display:none;">
+                <span class="receipt-fee-item-desc" id="receipt-additional-fee-desc">Additional hours</span>
+                <span class="receipt-fee-item-amt" id="receipt-fee-additional-amt">₹0.00</span>
+              </div>
+              <div class="receipt-total-section">
+                <span class="receipt-total-label">Total Amount Payable</span>
+                <span class="receipt-total-value" id="receipt-total">₹0.00</span>
+              </div>
+            </div>
+          </div>
+
+      <!-- ===== Smart Vehicle Search ===== -->
+      <section class="section" id="sec-search" style="display:none;">
+        <div class="section-header">
+          <h3><i class="fas fa-search"></i> Smart Vehicle Search</h3>
+          <span class="section-hint">Find vehicles by registration or type</span>
+        </div>
+        <div class="search-layout">
+          <div class="search-filters card">
+            <h4>Filters</h4>
+            <div class="form-group">
+              <label for="search-reg">Registration Number</label>
+              <input type="text" id="search-reg" placeholder="Search by registration…" autocomplete="off">
+            </div>
+            <div class="form-group">
+              <label for="search-type">Vehicle Type</label>
+              <select id="search-type">
+                <option value="">All Types</option>
+                <option value="Bike">Bike</option>
+                <option value="Car">Car</option>
+                <option value="Other">Other</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label for="search-sort">Sort Results By</label>
+              <select id="search-sort">
+                <option value="entry-desc">Entry Time (newest first)</option>
+                <option value="entry-asc">Entry Time (oldest first)</option>
+                <option value="duration">Parking Duration (longest first)</option>
+              </select>
+            </div>
+            <div class="search-summary">
+              <span id="search-count">0 vehicles found</span>
+            </div>
+          </div>
+          <div class="search-results card">
+            <h4>Results</h4>
+            <div class="search-results-grid" id="search-results-grid"></div>
+            <div class="empty-state" id="search-empty" style="display:none;">
+              <i class="fas fa-search-minus"></i>
+              <p>No vehicles match your search.</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ===== Parking Grid ===== -->
+      <section class="section" id="sec-parking-grid" style="display:none;">
+        <div class="section-header">
+          <h3><i class="fas fa-square"></i> Parking Grid — P01 to P20</h3>
+          <span class="section-hint" id="grid-status">All slots available</span>
+        </div>
+        <div class="parking-grid" id="parking-grid"></div>
+        <div class="queue-section" id="queue-section" style="display:none;">
+          <h3 class="queue-heading"><i class="fas fa-list-ul"></i> Waiting Queue</h3>
+          <div class="queue-list" id="queue-list"></div>
+          <div class="empty-state" id="queue-empty">
+            <i class="fas fa-check-circle"></i>
+            <p>No vehicles waiting.</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ===== Vehicle Entry ===== -->
+      <section class="section" id="sec-entry" style="display:none;">
+        <div class="card form-card">
+          <h3><i class="fas fa-arrow-circle-down"></i> Park a Vehicle</h3>
+          <form id="entry-form" novalidate>
+            <div class="form-group">
+              <label for="entry-reg">Registration Number <span class="required">*</span></label>
+              <input type="text" id="entry-reg" placeholder="e.g. ABC-1234" autocomplete="off">
+              <small class="form-hint">Alphanumeric, 4–12 characters (letters, digits, hyphen, space allowed).</small>
+            </div>
+            <div class="form-group">
+              <label for="entry-type">Vehicle Type <span class="required">*</span></label>
+              <select id="entry-type">
+                <option value="Bike">Bike</option>
+                <option value="Car">Car</option>
+                <option value="Other">Other</option>
+              </select>
+            </div>
+            <button type="submit" class="btn btn-primary">
+              <i class="fas fa-car"></i> Park Vehicle
+            </button>
+          </form>
+          <div id="entry-feedback" class="feedback" style="display:none;"></div>
+        </div>
+      </section>
+
+      <!-- ===== Vehicle Exit ===== -->
+      <section class="section" id="sec-exit" style="display:none;">
+        <div class="card form-card">
+          <h3><i class="fas fa-arrow-circle-up"></i> Vehicle Exit</h3>
+          <form id="exit-form" novalidate>
+            <div class="form-group">
+              <label for="exit-reg">Registration Number <span class="required">*</span></label>
+              <input type="text" id="exit-reg" placeholder="Enter registration to search" autocomplete="off">
+              <small class="form-hint">Type a registration and click "Search Vehicle".</small>
+            </div>
+            <button type="button" id="btn-search-exit" class="btn btn-secondary">
+              <i class="fas fa-search"></i> Search Vehicle
+            </button>
+          </form>
+
+          <div id="exit-result" class="exit-result" style="display:none;">
+            <div class="exit-detail-row">
+              <span class="exit-label">Registration</span>
+              <span class="exit-value" id="exit-reg-display">—</span>
+            </div>
+            <div class="exit-detail-row">
+              <span class="exit-label">Vehicle Type</span>
+              <span class="exit-value" id="exit-type-display">—</span>
+            </div>
+            <div class="exit-detail-row">
+              <span class="exit-label">Slot</span>
+              <span class="exit-value" id="exit-slot-display">—</span>
+            </div>
+            <div class="exit-detail-row">
+              <span class="exit-label">Entry Time</span>
+              <span class="exit-value" id="exit-entry-display">—</span>
+            </div>
+            <div class="exit-detail-row">
+              <span class="exit-label">Exit Time</span>
+              <span class="exit-value" id="exit-exit-display">—</span>
+            </div>
+            <div class="exit-detail-row">
+              <span class="exit-label">Duration</span>
+              <span class="exit-value" id="exit-duration-display">—</span>
+            </div>
+            <div class="exit-detail-row exit-fee-row">
+              <span class="exit-label">Parking Fee</span>
+              <span class="exit-value exit-fee-value" id="exit-fee-display">—</span>
+            </div>
+            <div class="exit-actions">
+              <button type="button" id="btn-exit-confirm" class="btn btn-danger">
+                <i class="fas fa-sign-out"></i> Confirm Exit &amp; Pay Fee
+              </button>
+              <button type="button" id="btn-exit-cancel" class="btn btn-secondary">Cancel</button>
+            </div>
+            <div id="exit-feedback" class="feedback" style="display:none;"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ===== History ===== -->
+      <section class="section" id="sec-history" style="display:none;">
+        <div class="section-header">
+          <h3><i class="fas fa-history"></i> Parking History</h3>
+          <div class="history-controls">
+            <input type="text" id="history-search" placeholder="Search by registration…" autocomplete="off">
+            <div class="sort-controls">
+              <label for="sort-select">Sort by:</label>
+              <select id="sort-select">
+                <option value="entry">Entry Time (newest first)</option>
+                <option value="entry-asc">Entry Time (oldest first)</option>
+                <option value="duration">Duration (longest first)</option>
+                <option value="fee">Fee (highest first)</option>
+              </select>
+            </div>
+          </div>
+        </div>
+        <div class="history-table-wrap">
+          <table class="history-table" id="history-table">
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>Receipt</th>
+                <th>Registration</th>
+                <th>Type</th>
+                <th>Slot</th>
+                <th>Entry</th>
+                <th>Exit</th>
+                <th>Duration</th>
+                <th>Fee</th>
+              </tr>
+            </thead>
+            <tbody id="history-tbody"></tbody>
+          </table>
+          <div class="empty-state" id="history-empty">
+            <i class="fas fa-inbox"></i>
+            <p>No parking sessions recorded yet.</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- Notifications -->
+      <div class="toast-container" id="toast-container"></div>
+    </main>
+  </div>
+
+  <script src="js/parking-data.js"></script>
+  <script src="js/main.js"></script>
+</body>
+</html>

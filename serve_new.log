@@ -1,0 +1,43 @@
+ INFO  Accepting connections at http://localhost:50127
+ HTTP  10/12/2026 7:59:04 PM ::1 GET /
+ HTTP  10/12/2026 7:59:04 PM ::1 Returned 200 in 35 ms
+ HTTP  10/12/2026 8:00:06 PM ::1 GET /
+ HTTP  10/12/2026 8:00:06 PM ::1 Returned 200 in 6 ms
+ HTTP  10/12/2026 8:00:06 PM ::1 GET /css/style.css
+ HTTP  10/12/2026 8:00:06 PM ::1 Returned 200 in 3 ms
+ HTTP  10/12/2026 8:00:06 PM ::1 GET /js/parking-data.js
+ HTTP  10/12/2026 8:00:06 PM ::1 Returned 200 in 9 ms
+ HTTP  10/12/2026 8:00:06 PM ::1 GET /js/main.js
+ HTTP  10/12/2026 8:00:06 PM ::1 Returned 200 in 6 ms
+ HTTP  10/12/2026 8:00:07 PM ::1 GET /favicon.ico
+ HTTP  10/12/2026 8:00:07 PM ::1 Returned 200 in 2 ms
+ HTTP  10/12/2026 8:07:40 PM ::1 GET /
+ HTTP  10/12/2026 8:07:40 PM ::1 Returned 304 in 2 ms
+ HTTP  10/12/2026 8:07:41 PM ::1 GET /css/style.css
+ HTTP  10/12/2026 8:07:41 PM ::1 Returned 304 in 5 ms
+ HTTP  10/12/2026 8:07:41 PM ::1 GET /js/parking-data.js
+ HTTP  10/12/2026 8:07:41 PM ::1 GET /js/main.js
+ HTTP  10/12/2026 8:07:41 PM ::1 Returned 304 in 3 ms
+ HTTP  10/12/2026 8:07:41 PM ::1 Returned 304 in 5 ms
+ HTTP  10/12/2026 8:07:42 PM ::1 GET /favicon.ico
+ HTTP  10/12/2026 8:07:42 PM ::1 Returned 200 in 2 ms
+ HTTP  10/12/2026 9:07:52 PM ::1 GET /
+ HTTP  10/12/2026 9:07:52 PM ::1 Returned 200 in 2 ms
+ HTTP  10/12/2026 9:07:57 PM ::1 GET /
+ HTTP  10/12/2026 9:07:57 PM ::1 Returned 304 in 4 ms
+ HTTP  10/12/2026 9:07:57 PM ::1 GET /css/style.css
+ HTTP  10/12/2026 9:07:57 PM ::1 Returned 304 in 2 ms
+ HTTP  10/12/2026 9:07:57 PM ::1 GET /js/parking-data.js
+ HTTP  10/12/2026 9:07:57 PM ::1 GET /js/main.js
+ HTTP  10/12/2026 9:07:57 PM ::1 Returned 304 in 10 ms
+ HTTP  10/12/2026 9:07:57 PM ::1 Returned 304 in 11 ms
+ HTTP  10/12/2026 9:07:58 PM ::1 GET /favicon.ico
+ HTTP  10/12/2026 9:07:58 PM ::1 Returned 200 in 2 ms
+ HTTP  10/12/2026 9:17:47 PM ::1 GET /
+ HTTP  10/12/2026 9:17:47 PM ::1 Returned 304 in 2 ms
+ HTTP  10/12/2026 9:17:47 PM ::1 GET /css/style.css
+ HTTP  10/12/2026 9:17:47 PM ::1 Returned 304 in 2 ms
+ HTTP  10/12/2026 9:17:47 PM ::1 GET /js/parking-data.js
+ HTTP  10/12/2026 9:17:47 PM ::1 Returned 304 in 2 ms
+ HTTP  10/12/2026 9:17:48 PM ::1 GET /js/main.js
+ HTTP  10/12/2026 9:17:48 PM ::1 Returned 304 in 2 ms

@@ -1,0 +1,13 @@
+ INFO  Accepting connections at http://localhost:60651
+ HTTP  10/12/2026 9:33:49 PM ::1 GET /
+ HTTP  10/12/2026 9:33:49 PM ::1 Returned 200 in 34 ms
+ HTTP  10/12/2026 9:34:52 PM ::1 GET /
+ HTTP  10/12/2026 9:34:52 PM ::1 Returned 200 in 5 ms
+ HTTP  10/12/2026 9:34:53 PM ::1 GET /css/style.css
+ HTTP  10/12/2026 9:34:53 PM ::1 Returned 200 in 4 ms
+ HTTP  10/12/2026 9:34:53 PM ::1 GET /js/parking-data.js
+ HTTP  10/12/2026 9:34:53 PM ::1 GET /js/main.js
+ HTTP  10/12/2026 9:34:53 PM ::1 Returned 200 in 11 ms
+ HTTP  10/12/2026 9:34:53 PM ::1 Returned 200 in 11 ms
+ HTTP  10/12/2026 9:34:54 PM ::1 GET /favicon.ico
+ HTTP  10/12/2026 9:34:54 PM ::1 Returned 200 in 4 ms
