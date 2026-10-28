@@ -14,6 +14,10 @@
   let vehicleTable = createVehicleHashTable(); // Map: reg → { slotIndex, vehicle }
   let sessionCounter = 0;                   // monotonic session id
   let receiptCounter = 0;                   // monotonic receipt number
+  let lastReceipt = null;                   // last generated receipt (persisted)
+  let currentExitContext = null;            // { reg, slotIndex, vehicle }
+
+  const VEHICLE_TYPES = ['Bike', 'Car', 'Other'];
 
   // ---- DOM refs ----
   const $ = (sel) => document.querySelector(sel);
@@ -59,6 +63,8 @@
     slotDetEntryRow: $('#slot-det-entry-row'),
     slotDetLiveDurationRow: $('#slot-det-live-duration-row'),
     slotDetLiveFeeRow: $('#slot-det-live-fee-row'),
+    slotDetLiveDuration: $('#slot-det-live-duration'),
+    slotDetLiveFee: $('#slot-det-live-fee'),
     slotDetailsClose: $('#slot-details-close'),
     // search
     searchReg: $('#search-reg'),
@@ -110,6 +116,8 @@
     receiptFeeItemized: $('#receipt-fee-itemized'),
     receiptTotal: $('#receipt-total'),
     receiptDate: $('#receipt-date'),
+    receiptEmpty: $('#receipt-empty'),
+    receiptActions: $('.receipt-actions'),
     btnPrintReceipt: $('#btn-print-receipt'),
     btnReceiptClose: $('#btn-receipt-close'),
     // toast
@@ -130,6 +138,7 @@
       vehicleTable: vehicleTable.toObject(),
       sessionCounter: sessionCounter,
       receiptCounter: receiptCounter,
+      lastReceipt: lastReceipt,
     };
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
@@ -138,18 +147,130 @@
     }
   }
 
+  function normalizeVehicleRecord(record) {
+    if (!record || typeof record !== 'object') return null;
+    const reg = normalizeReg(record.reg);
+    const type = VEHICLE_TYPES.indexOf(record.type) !== -1 ? record.type : null;
+    const entryTime = Number(record.entryTime);
+    if (!isValidReg(reg) || !type || !Number.isFinite(entryTime) || entryTime <= 0) {
+      return null;
+    }
+    return { reg: reg, type: type, entryTime: entryTime };
+  }
+
+  function normalizeSessionRecord(record) {
+    if (!record || typeof record !== 'object') return null;
+    const reg = normalizeReg(record.reg);
+    const type = VEHICLE_TYPES.indexOf(record.type) !== -1 ? record.type : 'Other';
+    const entryTime = Number(record.entryTime);
+    const exitTime = Number(record.exitTime);
+    const duration = Number(record.duration);
+    const fee = Number(record.fee);
+    if (!isValidReg(reg) || !Number.isFinite(entryTime) || !Number.isFinite(exitTime) || exitTime < entryTime) {
+      return null;
+    }
+    return {
+      id: Number(record.id) || 0,
+      reg: reg,
+      type: type,
+      slot: /^P\d{2}$/.test(String(record.slot || '')) ? String(record.slot) : '—',
+      entryTime: entryTime,
+      exitTime: exitTime,
+      duration: Number.isFinite(duration) && duration >= 0 ? duration : (exitTime - entryTime) / 1000,
+      fee: Number.isFinite(fee) && fee >= 0 ? fee : 0,
+      receiptNumber: typeof record.receiptNumber === 'string' ? record.receiptNumber : '',
+    };
+  }
+
   function loadState() {
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
       if (!raw) return false;
       const state = JSON.parse(raw);
-      if (!state || !state.slots) return false;
-      slots = state.slots;
-      waitingQueue.fromArray(state.waitingQueue || []);
-      historyList.fromArray(state.historyList || []);
-      vehicleTable.fromObject(state.vehicleTable || {});
-      sessionCounter = Number(state.sessionCounter) || 0;
-      receiptCounter = Number(state.receiptCounter) || 0;
+      if (!state || !Array.isArray(state.slots) || state.slots.length !== TOTAL_SLOTS) {
+        localStorage.removeItem(STORAGE_KEY);
+        return false;
+      }
+
+      // Rebuild the slot array from validated records.
+      const restoredSlots = createSlotArray();
+      for (let i = 0; i < state.slots.length; i++) {
+        const savedSlot = state.slots[i];
+        if (!savedSlot || typeof savedSlot !== 'object') {
+          localStorage.removeItem(STORAGE_KEY);
+          return false;
+        }
+        if (!savedSlot.occupied || !savedSlot.vehicle) continue;
+        const vehicle = normalizeVehicleRecord(savedSlot.vehicle);
+        if (!vehicle) {
+          localStorage.removeItem(STORAGE_KEY);
+          return false;
+        }
+        restoredSlots[i].occupied = true;
+        restoredSlots[i].vehicle = vehicle;
+      }
+
+      // Rebuild the lookup table from the slots. This guarantees that search,
+      // exit and duplicate checks can never disagree with the rendered map.
+      const restoredTable = createVehicleHashTable();
+      for (let i = 0; i < restoredSlots.length; i++) {
+        const slot = restoredSlots[i];
+        if (!slot.occupied) continue;
+        if (restoredTable.has(slot.vehicle.reg)) {
+          // Drop duplicate slot records rather than leaving two slots for one car.
+          slot.occupied = false;
+          slot.vehicle = null;
+          continue;
+        }
+        restoredTable.put(slot.vehicle.reg, i, slot.vehicle);
+      }
+
+      // Restore the queue in strict FIFO order, skipping invalid/duplicate entries.
+      const restoredQueue = createQueue();
+      const queuedRegs = new Set();
+      if (Array.isArray(state.waitingQueue)) {
+        for (let i = 0; i < state.waitingQueue.length; i++) {
+          const queued = normalizeVehicleRecord(state.waitingQueue[i]);
+          if (!queued || restoredTable.has(queued.reg) || queuedRegs.has(queued.reg)) continue;
+          queuedRegs.add(queued.reg);
+          restoredQueue.enqueue(queued);
+        }
+      }
+
+      // Restore completed sessions and derive safe counters from them.
+      const restoredHistory = createLinkedList();
+      const usedSessionIds = new Set();
+      let maxSessionId = 0;
+      let maxReceiptNumber = 0;
+      const savedHistory = Array.isArray(state.historyList) ? state.historyList : [];
+      for (let i = 0; i < savedHistory.length; i++) {
+        const session = normalizeSessionRecord(savedHistory[i]);
+        if (!session) continue;
+        if (!session.id || usedSessionIds.has(session.id)) {
+          session.id = maxSessionId + 1;
+        }
+        usedSessionIds.add(session.id);
+        maxSessionId = Math.max(maxSessionId, session.id);
+        const match = /^SPM-(\d+)$/.exec(session.receiptNumber);
+        if (match) maxReceiptNumber = Math.max(maxReceiptNumber, Number(match[1]));
+        restoredHistory.push(session);
+      }
+
+      slots = restoredSlots;
+      waitingQueue = restoredQueue;
+      historyList = restoredHistory;
+      vehicleTable = restoredTable;
+      sessionCounter = Math.max(Number(state.sessionCounter) || 0, maxSessionId);
+      receiptCounter = Math.max(Number(state.receiptCounter) || 0, maxReceiptNumber);
+      lastReceipt = normalizeReceipt(state.lastReceipt);
+      if (!lastReceipt && historyList.length > 0) {
+        const sessions = historyList.toArray();
+        let latest = sessions[0];
+        for (let i = 1; i < sessions.length; i++) {
+          if (sessions[i].exitTime > latest.exitTime) latest = sessions[i];
+        }
+        lastReceipt = receiptFromSession(latest);
+      }
       return true;
     } catch (e) {
       console.warn('LocalStorage load failed:', e);
@@ -165,8 +286,25 @@
     vehicleTable = createVehicleHashTable();
     sessionCounter = 0;
     receiptCounter = 0;
+    lastReceipt = null;
+    currentExitContext = null;
     localStorage.removeItem(STORAGE_KEY);
+
+    // Clear transient form/result state as well as persisted data.
+    dom.entryReg.value = '';
+    dom.exitReg.value = '';
+    dom.exitResult.style.display = 'none';
+    dom.searchReg.value = '';
+    dom.searchType.value = '';
+    dom.searchSort.value = 'entry-desc';
+    dom.historySearch.value = '';
+    dom.sortSelect.value = 'entry';
+    hideEntryFeedback();
+    hideExitFeedback();
+    closeSlotDetails();
     renderAll();
+    goTo('dashboard');
+    renderReceipt(null);
     toast('All data has been reset.', 'info');
   }
 
@@ -260,34 +398,41 @@
     return '₹' + amount.toFixed(0);
   }
 
-  function formatTime(ts) {
-    return new Date(ts).toLocaleString('en-IN', {
-      dateStyle: 'medium',
-      timeStyle: 'short',
-    });
-  }
-
   // ============================================================
   // VALIDATION
   // ============================================================
+  function normalizeReg(reg) {
+    return String(reg == null ? '' : reg)
+      .trim()
+      .toUpperCase()
+      .replace(/\s+/g, ' ');
+  }
+
   function isValidReg(reg) {
-    if (!reg || reg.trim().length === 0) return false;
-    const cleaned = reg.trim();
-    // Alphanumeric, hyphen, space; 4-12 chars
-    return /^[A-Za-z0-9\s\-]{4,12}$/.test(cleaned);
+    if (!reg) return false;
+    const cleaned = normalizeReg(reg);
+    // 4-12 characters (letters, digits, hyphen, single spaces) with at
+    // least one letter/digit so that whitespace-only values are rejected.
+    return /^(?=.*[A-Z0-9])[A-Z0-9 -]{4,12}$/.test(cleaned);
   }
 
   // ============================================================
   // VEHICLE ENTRY
   // ============================================================
   function handleEntry(reg, type) {
-    const cleaned = reg.trim().toUpperCase();
+    const cleaned = normalizeReg(reg);
     if (!isValidReg(cleaned)) {
-      showEntryFeedback('Invalid registration number. Use 4–12 alphanumeric characters.', 'error');
+      showEntryFeedback('Invalid registration number. Use 4–12 alphanumeric characters (hyphen and space allowed).', 'error');
       return;
     }
-    if (vehicleTable.has(cleaned)) {
-      showEntryFeedback('This registration is already parked.', 'error');
+    if (VEHICLE_TYPES.indexOf(type) === -1) {
+      showEntryFeedback('Please select a valid vehicle type.', 'error');
+      return;
+    }
+    const parked = vehicleTable.get(cleaned);
+    if (parked) {
+      const parkedSlot = slots[parked.slotIndex] ? slots[parked.slotIndex].id : 'a slot';
+      showEntryFeedback('This registration is already parked at ' + parkedSlot + '.', 'error');
       return;
     }
     // Check the waiting queue for duplicate registrations too
@@ -302,13 +447,14 @@
     // Try to assign the first free slot
     const slotIndex = findFirstAvailableSlot(slots);
     const entryTime = Date.now();
-    const vehicle = { reg: cleaned, type, entryTime };
+    const vehicle = { reg: cleaned, type: type, entryTime: entryTime };
 
     if (slotIndex === -1) {
       // Lot full: enqueue
-      waitingQueue.enqueue({ reg: cleaned, type, entryTime });
+      waitingQueue.enqueue({ reg: cleaned, type: type, entryTime: entryTime });
       saveState();
       renderAll();
+      dom.entryReg.value = '';
       showEntryFeedback('All slots are occupied. ' + cleaned + ' has been added to the waiting queue (position ' + waitingQueue.size + ').', 'info');
       toast('Lot full — ' + cleaned + ' joined the queue.', 'info');
       return;
@@ -319,6 +465,7 @@
     vehicleTable.put(cleaned, slotIndex, vehicle);
     saveState();
     renderAll();
+    dom.entryReg.value = '';
     showEntryFeedback('Parked ' + cleaned + ' at ' + slots[slotIndex].id + ' successfully.', 'success');
     toast('Parked ' + cleaned + ' at ' + slots[slotIndex].id, 'success');
   }
@@ -326,19 +473,37 @@
   // ============================================================
   // VEHICLE EXIT
   // ============================================================
-  let currentExitContext = null; // { reg, slotIndex, vehicle }
+  function clearExitResult() {
+    dom.exitResult.style.display = 'none';
+    currentExitContext = null;
+  }
 
   function searchExitVehicle(reg) {
-    const cleaned = reg.trim().toUpperCase();
+    const cleaned = normalizeReg(reg);
     if (!isValidReg(cleaned)) {
+      clearExitResult();
       showExitFeedback('Invalid registration number.', 'error');
       return;
     }
     const found = vehicleTable.get(cleaned);
     if (!found) {
+      clearExitResult();
+      const queued = waitingQueue.toArray();
+      for (let i = 0; i < queued.length; i++) {
+        if (queued[i].reg === cleaned) {
+          showExitFeedback(cleaned + ' is in the waiting queue (position ' + (i + 1) + ') and has no active slot yet.', 'info');
+          return;
+        }
+      }
       showExitFeedback('No active vehicle found with registration ' + cleaned + '.', 'error');
       return;
     }
+    if (!slots[found.slotIndex] || !slots[found.slotIndex].occupied) {
+      clearExitResult();
+      showExitFeedback('The parking record for ' + cleaned + ' is out of date. Please try again.', 'error');
+      return;
+    }
+
     currentExitContext = { reg: cleaned, slotIndex: found.slotIndex, vehicle: found.vehicle };
     const v = found.vehicle;
     const now = Date.now();
@@ -352,37 +517,17 @@
     dom.exitExitDisplay.textContent = formatTime(now);
     dom.exitDurationDisplay.textContent = formatDuration(duration);
     // Show itemized estimated fee, matching calcFee logic
-    const estFirstHour = Math.min(calc.fee, 30);
-    const estExtraHours = duration > 3600 ? Math.ceil(duration / 3600 - 1) : 0;
-    const estExtraFee = estExtraHours * 20;
+    const breakdown = getFeeBreakdown(duration, calc.fee);
     if (calc.fee === 0) {
       dom.exitFeeDisplay.textContent = 'Free (no charge)';
     } else {
-      const parts = ['First hour: ' + formatCurrency(estFirstHour)];
-      if (estExtraHours > 0) {
-        parts.push(estExtraHours + ' additional hour' + (estExtraHours > 1 ? 's' : '') + ': ' + formatCurrency(estExtraFee));
+      const parts = ['First hour: ' + formatCurrency(breakdown.firstHour)];
+      if (breakdown.additionalHours > 0) {
+        parts.push(breakdown.additionalHours + ' additional hour' + (breakdown.additionalHours > 1 ? 's' : '') + ': ' + formatCurrency(breakdown.additionalFee));
       }
       parts.push('Estimated total: ' + formatCurrency(calc.fee));
       dom.exitFeeDisplay.innerHTML = parts.join('<br>');
     }
-    // Also expose the full receipt data on the DOM so persistent handlers can re-render
-    // the printable receipt after a refresh without re-running a real exit.
-    dom.exitFeeDisplay._receipt = {
-      receiptNumber: 'SPM-' + String(receiptCounter + 1).padStart(4, '0'),
-      reg: v.reg,
-      type: v.type,
-      slot: slots[found.slotIndex].id,
-      entryTime: v.entryTime,
-      exitTime: now,
-      durationSec: duration,
-      fee: calc.fee,
-      entryFeeDesc: 'First hour',
-      entryFeeAmt: estFirstHour,
-      additionalHours: estExtraHours,
-      additionalFeeDesc: estExtraHours > 0 ? (estExtraHours + ' additional hour' + (estExtraHours > 1 ? 's' : '') + ' × ₹20.00') : '',
-      additionalFeeAmt: estExtraFee,
-      finalFee: calc.fee,
-    };
 
     dom.exitResult.style.display = 'block';
     hideExitFeedback();
@@ -390,60 +535,61 @@
 
   function confirmExit() {
     if (!currentExitContext) return;
-    const { reg, slotIndex, vehicle } = currentExitContext;
+    const { reg, slotIndex } = currentExitContext;
+    const active = vehicleTable.get(reg);
+    if (!active || active.slotIndex !== slotIndex || !slots[slotIndex] || !slots[slotIndex].occupied) {
+      clearExitResult();
+      renderAll();
+      showExitFeedback('This vehicle is no longer parked, so the exit could not be processed.', 'error');
+      return;
+    }
+
+    // Capture and clear the context before mutating state. This makes the
+    // confirmation handler re-entrancy safe: a double click cannot create a
+    // second history row or a duplicate receipt.
+    const vehicle = active.vehicle;
+    currentExitContext = null;
     const now = Date.now();
     const calc = calcFee(vehicle.entryTime, now);
     const durationSec = calc.durationSec;
     const fee = calc.fee;
-    const entryFeeDesc = 'First hour';
-    const entryFeeAmt = Math.min(fee, 30);
-    let additionalHours = 0;
-    let additionalFeeDesc = '';
-    let additionalFeeAmt = 0;
-    if (durationSec > 3600) {
-      additionalHours = Math.ceil(durationSec / 3600 - 1);
-      additionalFeeDesc = additionalHours + ' additional hour' + (additionalHours > 1 ? 's' : '') + ' × ₹20.00';
-      additionalFeeAmt = additionalHours * 20;
-      receipt.additionalHours = additionalHours;
-      receipt.additionalFeeDesc = additionalFeeDesc;
-      receipt.additionalFeeAmt = additionalFeeAmt;
-    } else {
-      additionalHours = 0;
-      additionalFeeDesc = '';
-      additionalFeeAmt = 0;
-      receipt.additionalHours = 0;
-      receipt.additionalFeeDesc = '';
-      receipt.additionalFeeAmt = 0;
-    }
-    // Dequeue from hash + free slot
+    const slotId = slots[slotIndex].id;
+    const receiptNumber = 'SPM-' + String(receiptCounter + 1).padStart(4, '0');
+    const sessionId = sessionCounter + 1;
+
+    // Remove the active record and free the slot.
     vehicleTable.remove(reg);
     const releasedVehicle = vacateSlot(slots, slotIndex);
+    if (!releasedVehicle) {
+      // Restore the lookup entry if the slot was unexpectedly empty.
+      vehicleTable.put(reg, slotIndex, vehicle);
+      renderAll();
+      showExitFeedback('Unable to release the slot. Please refresh and try again.', 'error');
+      return;
+    }
 
-    // Generate receipt number and store receipt data
     receiptCounter += 1;
-    const receiptNumber = 'SPM-' + String(receiptCounter).padStart(4, '0');
-    const receipt = {
+    sessionCounter += 1;
+
+    const receipt = makeReceipt({
       receiptNumber: receiptNumber,
-      sessionId: sessionCounter + 1,
+      sessionId: sessionId,
       reg: releasedVehicle.reg,
       type: releasedVehicle.type,
-      slot: slots[slotIndex].id,
+      slot: slotId,
       entryTime: releasedVehicle.entryTime,
       exitTime: now,
       durationSec: durationSec,
       fee: fee,
-    };
-    receipt.entryFeeDesc = entryFeeDesc;
-    receipt.entryFeeAmt = entryFeeAmt;
-    receipt.finalFee = fee;
+    });
+    lastReceipt = receipt;
 
     // Create history node (linked list)
-    sessionCounter += 1;
     const session = {
-      id: sessionCounter,
+      id: sessionId,
       reg: releasedVehicle.reg,
       type: releasedVehicle.type,
-      slot: slots[slotIndex].id,
+      slot: slotId,
       entryTime: releasedVehicle.entryTime,
       exitTime: now,
       duration: durationSec,
@@ -452,36 +598,25 @@
     };
     historyList.push(session);
 
-    // Auto-assign to next queued vehicle, if any
+    // Assign the just-released slot to the first vehicle in the FIFO queue.
     let autoMessage = '';
-    if (!waitingQueue.isEmpty()) {
+    while (!waitingQueue.isEmpty()) {
       const next = waitingQueue.dequeue();
-      const nextSlotIndex = findFirstAvailableSlot(slots);
-      if (nextSlotIndex !== -1) {
-        const nextVehicle = { reg: next.reg, type: next.type, entryTime: next.entryTime };
-        occupySlot(slots, nextSlotIndex, nextVehicle);
-        vehicleTable.put(next.reg, nextSlotIndex, nextVehicle);
-        autoMessage = ' ' + next.reg + ' (from queue) assigned to ' + slots[nextSlotIndex].id + '.';
-      } else {
-        // Shouldn't happen, but be safe
-        waitingQueue.enqueue(next);
-      }
+      if (!next || !isValidReg(next.reg) || vehicleTable.has(next.reg)) continue;
+      const nextVehicle = { reg: next.reg, type: next.type, entryTime: next.entryTime };
+      occupySlot(slots, slotIndex, nextVehicle);
+      vehicleTable.put(next.reg, slotIndex, nextVehicle);
+      autoMessage = ' ' + next.reg + ' (from queue) was assigned to ' + slotId + '.';
+      break;
     }
 
     saveState();
     renderAll();
     dom.exitResult.style.display = 'none';
-    currentExitContext = null;
-
-    // Show printable receipt
     showReceipt(receipt);
 
     let msg = 'Exit recorded for ' + reg + '. Duration: ' + formatDuration(durationSec) + '. Fee: ';
-    if (fee === 0) {
-      msg += 'Free';
-    } else {
-      msg += formatCurrency(fee);
-    }
+    msg += fee === 0 ? 'Free' : formatCurrency(fee);
     if (autoMessage) msg += autoMessage;
     showExitFeedback(msg, 'success');
     toast('Exit recorded: ' + reg + ' — Receipt ' + receiptNumber, 'success');
@@ -497,11 +632,92 @@
   // ============================================================
   // PRINTABLE RECEIPT
   // ============================================================
-  let lastReceipt = null;
+  function getFeeBreakdown(durationSec, fee) {
+    const safeDuration = Math.max(0, Number(durationSec) || 0);
+    const safeFee = Math.max(0, Number(fee) || 0);
+    const firstHour = safeFee > 0 ? Math.min(safeFee, 30) : 0;
+    const additionalHours = safeDuration > 3600 ? Math.ceil(safeDuration / 3600 - 1) : 0;
+    return {
+      firstHour: firstHour,
+      additionalHours: additionalHours,
+      additionalFee: safeFee > 0 ? additionalHours * 20 : 0,
+    };
+  }
 
-  function showReceipt(receipt) {
-    lastReceipt = receipt;
+  function makeReceipt(data) {
+    const durationSec = Math.max(0, Number(data.durationSec) || 0);
+    const fee = Math.max(0, Number(data.fee) || 0);
+    const breakdown = getFeeBreakdown(durationSec, fee);
+    return {
+      receiptNumber: String(data.receiptNumber || 'SPM-0000'),
+      sessionId: Number(data.sessionId) || 0,
+      reg: normalizeReg(data.reg),
+      type: VEHICLE_TYPES.indexOf(data.type) !== -1 ? data.type : 'Other',
+      slot: /^P\d{2}$/.test(String(data.slot || '')) ? String(data.slot) : '—',
+      entryTime: Number(data.entryTime) || 0,
+      exitTime: Number(data.exitTime) || 0,
+      durationSec: durationSec,
+      fee: fee,
+      entryFeeDesc: fee > 0 ? 'First hour' : 'No charge',
+      entryFeeAmt: breakdown.firstHour,
+      additionalHours: breakdown.additionalHours,
+      additionalFeeDesc: breakdown.additionalHours > 0
+        ? breakdown.additionalHours + ' additional hour' + (breakdown.additionalHours > 1 ? 's' : '') + ' × ₹20.00'
+        : '',
+      additionalFeeAmt: breakdown.additionalFee,
+      finalFee: fee,
+    };
+  }
+
+  function receiptFromSession(session) {
+    if (!session) return null;
+    return makeReceipt({
+      receiptNumber: session.receiptNumber || ('SPM-' + String(session.id || 0).padStart(4, '0')),
+      sessionId: session.id,
+      reg: session.reg,
+      type: session.type,
+      slot: session.slot,
+      entryTime: session.entryTime,
+      exitTime: session.exitTime,
+      durationSec: session.duration,
+      fee: session.fee,
+    });
+  }
+
+  function normalizeReceipt(record) {
+    if (!record || typeof record !== 'object') return null;
+    const reg = normalizeReg(record.reg);
+    const entryTime = Number(record.entryTime);
+    const exitTime = Number(record.exitTime);
+    const durationSec = Number(record.durationSec);
+    const fee = Number(record.fee);
+    if (!isValidReg(reg) || !Number.isFinite(entryTime) || !Number.isFinite(exitTime) || exitTime < entryTime) {
+      return null;
+    }
+    if (!Number.isFinite(durationSec) || durationSec < 0 || !Number.isFinite(fee) || fee < 0) {
+      return null;
+    }
+    return makeReceipt({
+      receiptNumber: record.receiptNumber || ('SPM-' + String(record.sessionId || 0).padStart(4, '0')),
+      sessionId: record.sessionId,
+      reg: reg,
+      type: record.type,
+      slot: record.slot,
+      entryTime: entryTime,
+      exitTime: exitTime,
+      durationSec: durationSec,
+      fee: fee,
+    });
+  }
+
+  function renderReceipt(receipt) {
     if (!dom.receiptSection) return;
+    if (!receipt) {
+      dom.receiptSection.style.display = 'none';
+      if (dom.receiptEmpty) dom.receiptEmpty.style.display = 'flex';
+      if (dom.btnPrintReceipt) dom.btnPrintReceipt.disabled = true;
+      return;
+    }
     const r = receipt;
     dom.receiptNumber.textContent = r.receiptNumber;
     dom.receiptReg.textContent = r.reg;
@@ -511,31 +727,18 @@
     dom.receiptExitTime.textContent = formatReceiptTime(r.exitTime);
     dom.receiptDuration.textContent = formatDurationHM(r.durationSec);
     dom.receiptDurationLong.textContent = formatDuration(r.durationSec);
-    // Itemize the fee calculation
-    // Render itemized fee using the precomputed receipt fields
+
     const firstDiv = document.getElementById('receipt-fee-itemized');
-    const entryFeeDescEl = document.getElementById('receipt-entry-fee-desc');
-    const entryFeeAmtEl = document.getElementById('receipt-entry-fee-amt');
     const addDiv = document.getElementById('receipt-fee-additional');
-    const addAmt = document.getElementById('receipt-fee-additional-amt');
-    const addDesc = document.getElementById('receipt-additional-fee-desc');
     const totalDiv = document.getElementById('receipt-total');
     if (firstDiv) {
       firstDiv.innerHTML =
         '<span class="receipt-fee-item-desc">' + r.entryFeeDesc + '</span>' +
         '<span class="receipt-fee-item-amt">₹' + r.entryFeeAmt.toFixed(2) + '</span>';
     }
-    if (entryFeeDescEl) {
-      entryFeeDescEl.innerHTML = '<span>' + r.entryFeeDesc + '</span><span>₹' + r.entryFeeAmt.toFixed(2) + '</span>';
-    }
-    if (entryFeeAmtEl) {
-      entryFeeAmtEl.innerHTML = '<span>' + r.entryFeeDesc + '</span><span>₹' + r.entryFeeAmt.toFixed(2) + '</span>';
-    }
-    if (addDiv && addAmt) {
+    if (addDiv) {
       if (r.additionalHours > 0) {
         addDiv.style.display = '';
-        addAmt.textContent = '₹' + r.additionalFeeAmt.toFixed(2);
-        addDesc.textContent = r.additionalFeeDesc;
         addDiv.innerHTML =
           '<span class="receipt-fee-item-desc">' + r.additionalFeeDesc + '</span>' +
           '<span class="receipt-fee-item-amt">₹' + r.additionalFeeAmt.toFixed(2) + '</span>';
@@ -543,30 +746,31 @@
         addDiv.style.display = 'none';
       }
     }
-    if (addDesc) {
-      addDesc.textContent = r.additionalFeeDesc;
-    }
     if (totalDiv) {
-      totalDiv.innerHTML =
-        '<span class="receipt-total-label">Total Amount Payable</span>' +
-        '<span class="receipt-total-value">₹' + r.finalFee.toFixed(2) + '</span>';
+      totalDiv.textContent = '₹' + r.finalFee.toFixed(2);
     }
     if (dom.receiptDate) {
-      dom.receiptDate.textContent = new Date().toLocaleDateString('en-IN', {
+      dom.receiptDate.textContent = new Date(r.exitTime).toLocaleDateString('en-IN', {
         weekday: 'long', year: 'numeric', month: 'long', day: 'numeric'
       });
     }
+    if (dom.receiptEmpty) dom.receiptEmpty.style.display = 'none';
+    if (dom.btnPrintReceipt) dom.btnPrintReceipt.disabled = false;
     dom.receiptSection.style.display = 'block';
-    dom.receiptSection.scrollIntoView({ behavior: 'smooth', block: 'center' });
   }
 
-  /**
-   * Return true when the printable receipt is currently being shown to the user.
-   * Used to persist which receipt is already displayed so it can be re-rendered
-   * after a page refresh without re-running a real exit.
-   */
-  function isReceiptVisible() {
-    return dom.receiptSection && dom.receiptSection.style.display !== 'none';
+  function showReceipt(receipt) {
+    if (!receipt) {
+      lastReceipt = null;
+      renderReceipt(null);
+      return;
+    }
+    lastReceipt = receipt;
+    goTo('receipt');
+    renderReceipt(receipt);
+    setTimeout(function () {
+      dom.receiptSection.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }, 50);
   }
 
   function printReceipt() {
@@ -574,12 +778,14 @@
       toast('No receipt to print.', 'error');
       return;
     }
+    goTo('receipt');
+    renderReceipt(lastReceipt);
     window.print();
   }
 
   function hideReceipt() {
     if (dom.receiptSection) dom.receiptSection.style.display = 'none';
-    lastReceipt = null;
+    goTo('dashboard');
   }
 
   // ============================================================
@@ -591,6 +797,7 @@
     renderParkingMap();
     renderSearchResults();
     renderQueue();
+    refreshOpenSlotDetails();
   }
 
   function renderStats() {
@@ -663,7 +870,8 @@
         el.appendChild(regEl);
       }
 
-      // Click + keyboard both open details      el.addEventListener('click', function () { openSlotDetails(i); });
+      // Click + keyboard both open details
+      el.addEventListener('click', function () { openSlotDetails(i); });
 
       el.addEventListener('keydown', function (e) {
         if (e.key === 'Enter' || e.key === ' ') {
@@ -688,17 +896,21 @@
     }
   }
 
-  function openSlotDetails(index) {
+  function populateSlotDetails(index) {
     if (index < 0 || index >= slots.length) return;
     const slot = slots[index];
     dom.slotDetId.textContent = slot.id;
+    dom.slotDetailsTitle.textContent = 'Slot ' + slot.id;
     if (slot.occupied) {
+      const calc = calcFee(slot.vehicle.entryTime, Date.now());
       dom.slotDetailsStatus.textContent = 'Occupied';
       dom.slotDetailsStatus.className = 'slot-details-status slot-details-status--occupied';
       dom.slotDetStatus.textContent = 'Occupied';
       dom.slotDetReg.textContent = slot.vehicle.reg;
       dom.slotDetType.textContent = slot.vehicle.type;
       dom.slotDetEntry.textContent = formatTime(slot.vehicle.entryTime);
+      dom.slotDetLiveDuration.textContent = formatDuration(calc.durationSec);
+      dom.slotDetLiveFee.textContent = calc.fee === 0 ? 'Free' : formatCurrency(calc.fee);
       dom.slotDetRegRow.style.display = '';
       dom.slotDetTypeRow.style.display = '';
       dom.slotDetEntryRow.style.display = '';
@@ -711,27 +923,48 @@
       dom.slotDetReg.textContent = '—';
       dom.slotDetType.textContent = '—';
       dom.slotDetEntry.textContent = '—';
+      dom.slotDetLiveDuration.textContent = '—';
+      dom.slotDetLiveFee.textContent = '—';
       dom.slotDetRegRow.style.display = 'none';
       dom.slotDetTypeRow.style.display = 'none';
       dom.slotDetEntryRow.style.display = 'none';
       dom.slotDetLiveFeeRow.style.display = 'none';
       dom.slotDetLiveDurationRow.style.display = 'none';
     }
-    dom.slotDetailsTitle.textContent = 'Slot ' + slot.id;
+  }
+
+  function openSlotDetails(index) {
+    if (index < 0 || index >= slots.length) return;
+    // The details panel lives in the Parking Map section. If a slot is
+    // clicked from the Parking Grid, switch to the map so the details are
+    // actually visible.
+    if (getCurrentVisibleSection() !== 'parkingMap') {
+      goTo('parking-map');
+    }
+    populateSlotDetails(index);
+    dom.slotDetails.dataset.index = String(index);
     dom.slotDetails.style.display = 'block';
     // Scroll details into view on mobile
     setTimeout(function () { dom.slotDetails.scrollIntoView({ behavior: 'smooth', block: 'nearest' }); }, 60);
   }
 
+  function refreshOpenSlotDetails() {
+    if (!dom.slotDetails || dom.slotDetails.style.display === 'none') return;
+    const index = parseInt(dom.slotDetails.dataset.index, 10);
+    if (!isNaN(index)) populateSlotDetails(index);
+  }
+
   function closeSlotDetails() {
+    if (!dom.slotDetails) return;
     dom.slotDetails.style.display = 'none';
+    delete dom.slotDetails.dataset.index;
   }
 
   function renderHistory(filterReg) {
     let sessions = historyList.toArray();
-    if (filterReg && filterReg.trim()) {
-      const f = filterReg.trim().toUpperCase();
-      sessions = sessions.filter(function (s) { return s.reg === f; });
+    const filter = normalizeReg(filterReg);
+    if (filter) {
+      sessions = sessions.filter(function (s) { return s.reg.indexOf(filter) !== -1; });
     }
     const sortKey = dom.sortSelect.value;
     const comparator = (SESSION_COMPARATORS[sortKey] || SESSION_COMPARATORS['entry']);
@@ -739,6 +972,12 @@
 
     dom.historyTbody.innerHTML = '';
     if (sessions.length === 0) {
+      const emptyText = document.getElementById('history-empty-text');
+      if (emptyText) {
+        emptyText.textContent = filter
+          ? 'No sessions match "' + filter + '".'
+          : 'No parking sessions recorded yet.';
+      }
       dom.historyEmpty.style.display = 'flex';
       return;
     }
@@ -810,7 +1049,7 @@
   }
 
   function renderSearchResults() {
-    const regFilter = dom.searchReg ? dom.searchReg.value.trim().toUpperCase() : '';
+    const regFilter = dom.searchReg ? normalizeReg(dom.searchReg.value) : '';
     const typeFilter = dom.searchType ? dom.searchType.value : '';
     const sortKey = dom.searchSort ? dom.searchSort.value : 'entry-desc';
 
@@ -877,13 +1116,8 @@
         // Click to highlight slot on map + open details
         card.addEventListener('click', function () {
           if (!v.queued && v.slotIndex >= 0) {
+            goTo('parking-map', v.reg);
             openSlotDetails(v.slotIndex);
-            // Navigate to map if not already there, with highlight
-            if (getCurrentVisibleSection() !== 'parking-map') {
-              goTo('parking-map', v.reg);
-            } else {
-              renderSlotGrid(dom.mapGrid, v.reg);
-            }
           } else {
             toast('Cannot highlight: ' + v.reg + ' is in the waiting queue.', 'info');
           }
@@ -910,14 +1144,13 @@
     const items = waitingQueue.toArray();
     const now = Date.now();
 
+    dom.queueSection.style.display = 'block';
     if (items.length === 0) {
-      dom.queueSection.style.display = 'none';
       dom.queueEmpty.style.display = 'flex';
       dom.queueList.innerHTML = '';
       return;
     }
 
-    dom.queueSection.style.display = 'block';
     dom.queueEmpty.style.display = 'none';
 
     dom.queueList.innerHTML = '';
@@ -941,7 +1174,7 @@
   // QUEUE CANCELLATION
   // ============================================================
   function cancelQueueRequest(reg) {
-    const cleaned = reg.trim().toUpperCase();
+    const cleaned = normalizeReg(reg);
     const items = waitingQueue.toArray();
     const idx = items.findIndex(function (item) { return item.reg === cleaned; });
     if (idx === -1) {
@@ -975,18 +1208,37 @@
     'receipt': 'receipt',
   };
 
+  // Canonical data-section value for each internal section key.
+  const SECTION_NAV = {
+    dashboard: 'dashboard',
+    parkingMap: 'parking-map',
+    parkingGrid: 'parking-grid',
+    entry: 'entry',
+    search: 'search',
+    exit: 'exit',
+    history: 'history',
+    receipt: 'receipt',
+  };
+
   let _pendingHighlightReg = null;
 
   function goTo(section, highlightReg) {
     if (highlightReg) _pendingHighlightReg = highlightReg;
     const key = SECTION_KEY[section] || section;
+    if (!dom.sections[key]) {
+      console.error('Unknown section key:', key);
+      return;
+    }
+
     // Hide all sections
     Object.keys(dom.sections).forEach(function (k) {
-      dom.sections[k].style.display = 'none';
+      if (dom.sections[k]) dom.sections[k].style.display = 'none';
     });
     // Close slot details when leaving map
-    if (key !== 'parkingMap' && key !== 'receipt') closeSlotDetails();
-    // Show target
+    if (key !== 'parkingMap') closeSlotDetails();
+    if (key !== 'parkingMap') _pendingHighlightReg = null;
+
+    // Render sections that need live data before they become visible.
     if (key === 'history') {
       renderHistory(dom.historySearch.value);
     }
@@ -1003,20 +1255,31 @@
     if (key === 'search') {
       renderSearchResults();
     }
-    if (key === 'receipt') {
-      // Receipt section shown by showReceipt() — nothing extra to render here
-    }
-    if (!dom.sections[key]) {
-      console.error('Unknown section key:', key);
-      return;
-    }
+
     dom.sections[key].style.display = '';
-    dom.topbarTitle.textContent = getSectionTitle(section);
+    if (key === 'receipt') {
+      renderReceipt(lastReceipt);
+    }
+
+    const navSection = SECTION_NAV[key] || section;
+    dom.topbarTitle.textContent = getSectionTitle(navSection);
+    currentSection = navSection;
 
     // Update nav active state
     dom.navItems.forEach(function (item) {
-      item.classList.toggle('active', item.dataset.section === section);
+      item.classList.toggle('active', item.dataset.section === navSection);
     });
+
+    // Keep the URL hash in sync with the visible section, including sections
+    // opened programmatically (for example the receipt after an exit).
+    const newHash = '#' + navSection;
+    if (location.hash !== newHash) {
+      try {
+        history.replaceState(null, '', newHash);
+      } catch (e) {
+        location.hash = navSection;
+      }
+    }
 
     // Close mobile sidebar on selection
     dom.sidebar.classList.remove('open');
@@ -1024,9 +1287,18 @@
 
   function sectionFromHash(hash) {
     if (!hash) return 'dashboard';
-    const map = { '#dashboard': 'dashboard', '#grid': 'parkingGrid', '#parking-grid': 'parkingGrid', '#parking-map': 'parkingMap', '#entry': 'entry', '#search': 'search', '#exit': 'exit', '#history': 'history' };
-    const section = map[hash] || null;
-    return section;
+    const map = {
+      '#dashboard': 'dashboard',
+      '#grid': 'parkingGrid',
+      '#parking-grid': 'parkingGrid',
+      '#parking-map': 'parkingMap',
+      '#entry': 'entry',
+      '#search': 'search',
+      '#exit': 'exit',
+      '#history': 'history',
+      '#receipt': 'receipt',
+    };
+    return map[hash] || null;
   }
 
   function applyHash() {
@@ -1106,9 +1378,7 @@
         const raw = item.dataset.section;
         if (!raw) return;
         e.preventDefault();
-        const key = SECTION_KEY[raw] || raw;
         goTo(raw);
-        currentSection = raw;
         if (history.replaceState) {
           history.replaceState(null, '', '#' + raw);
         } else {
@@ -1120,9 +1390,10 @@
     // Hash change navigation (deep links / back button)
     window.addEventListener('hashchange', function () {
       const section = sectionFromHash(location.hash);
-      if (section && section !== currentSection) {
+      if (!section) return;
+      const key = SECTION_KEY[section] || section;
+      if (SECTION_NAV[key] !== currentSection) {
         goTo(section);
-        currentSection = section;
       }
     });
 
@@ -1168,21 +1439,13 @@
       dom.slotDetailsClose.addEventListener('click', closeSlotDetails);
     }
 
-    // Parking grid click also opens details (consistent UX)
-    dom.parkingGrid.addEventListener('click', function (e) {
-      const slotEl = e.target.closest('.parking-slot');
-      if (slotEl && slotEl.dataset.index !== undefined) {
-        openSlotDetails(parseInt(slotEl.dataset.index, 10));
-      }
-    });
-
     // Smart vehicle search
     let searchTimer = null;
     function runSearch() {
       renderSearchResults();
-      // Also highlight on map if map is open
-      if (dom.mapGrid && dom.mapGrid.style.display !== 'none') {
-        renderSlotGrid(dom.mapGrid, dom.searchReg ? dom.searchReg.value.trim().toUpperCase() : null);
+      // Also refresh highlighting on the map when it is the visible section.
+      if (dom.sections.parkingMap && dom.sections.parkingMap.style.display !== 'none') {
+        renderSlotGrid(dom.mapGrid, normalizeReg(dom.searchReg.value) || null);
       }
     }
     dom.searchReg.addEventListener('input', function () {
@@ -1257,29 +1520,8 @@
   function startLiveTimer() {
     stopLiveTimer();
     timerInterval = setInterval(function () {
-      // Update slot details panel if open and showing a parked vehicle
-      if (dom.slotDetails && dom.slotDetails.style.display !== 'none') {
-        const title = dom.slotDetailsTitle.textContent;
-        if (title && title.indexOf('Slot P') === 0) {
-          const idx = parseInt(title.replace('Slot ', ''), 10) - 1;
-          if (!isNaN(idx) && slots[idx] && slots[idx].occupied) {
-            const v = slots[idx].vehicle;
-            const now = Date.now();
-            const calc = calcFee(v.entryTime, now);
-            dom.slotDetEntry.textContent = formatTime(v.entryTime);
-            // Update a live duration row if present
-            const liveDurEl = document.getElementById('slot-det-live-duration');
-            if (liveDurEl) {
-              liveDurEl.textContent = formatDuration(calc.durationSec);
-            }
-            // Also update an estimated fee line if present
-            const liveFeeEl = document.getElementById('slot-det-live-fee');
-            if (liveFeeEl) {
-              liveFeeEl.textContent = 'Estimated fee: ' + (calc.fee === 0 ? 'Free' : '₹' + calc.fee.toFixed(0));
-            }
-          }
-        }
-      }
+      // Update the open slot details panel with the latest duration/fee.
+      refreshOpenSlotDetails();
       // Update queue waiting durations
       if (dom.queueList && dom.queueList.children.length > 0) {
         renderQueue();
@@ -1307,10 +1549,12 @@
       vehicleTable = createVehicleHashTable();
       sessionCounter = 0;
       receiptCounter = 0;
+      lastReceipt = null;
     }
     bindEvents();
     renderAll();
     applyHash();
+    renderReceipt(lastReceipt);
     startLiveTimer();
     if (restored) {
       toast('Restored ' + historyList.length + ' history records from last session.', 'info');
